@@ -1,13 +1,13 @@
-package com.example.ayu_backend;
+package com.ayusystem;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-public class AyuBackendApplication {
+public class AyusystemApplication {
 
 	public static void main(String[] args) {
-		SpringApplication.run(AyuBackendApplication.class, args);
+		SpringApplication.run(AyusystemApplication.class, args);
 	}
 
 }

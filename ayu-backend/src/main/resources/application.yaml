@@ -3,10 +3,16 @@ server:
 
 spring:
   datasource:
-    url: jdbc:mysql://localhost:3306/ayusystem
-    username: root
-    password: root
+    driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+    url: jdbc:sqlserver://localhost;databaseName=Network;encrypt=false
+    username: sa
+    password: 123asd
+
   jpa:
     hibernate:
       ddl-auto: update
+    database-platform: org.hibernate.dialect.SQLServerDialect
     show-sql: true
+
+  main:
+    web-application-type: servlet
