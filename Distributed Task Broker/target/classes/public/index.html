@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Originator UI - Task Submission (M1)</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>🚀 Distributed Task Broker</h1>
+            <p class="subtitle">Originator Interface - M1 TCP Task Submission</p>
+            <nav class="nav-links">
+                <a href="/">Home</a>
+                <a href="/dashboard.html">Dashboard</a>
+                <a href="/workers.html">Workers</a>
+            </nav>
+        </header>
+
+        <div class="task-form">
+            <h2>📤 Submit New Task (M1: TCP)</h2>
+            <p class="info-text">
+                This form triggers M1 TCP task submission. The broker will:
+                <br>✅ Accept via TCP (M1)
+                <br>✅ Broadcast config via Multicast (M4)
+                <br>✅ Split into N sub-tasks based on your selection (M2)
+                <br>✅ Broadcast progress via NIO (M3)
+                <br><span id="workerCountInfo" style="color: #28a745; font-weight: bold;">⏳ Loading workers...</span>
+            </p>
+
+            <form id="taskForm">
+                <div class="form-group">
+                    <label for="taskId">Task ID:</label>
+                    <input type="number" id="taskId" name="taskId" placeholder="e.g., 1001" required>
+                    <small>Unique identifier for this task</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="taskName">Task Name:</label>
+                    <input type="text" id="taskName" name="taskName" placeholder="e.g., Image Processing Pipeline"
+                        required>
+                    <small>Descriptive name for this task</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="subTaskCount">Number of Sub-Tasks:</label>
+                    <select id="subTaskCount" name="subTaskCount" required>
+                        <option value="">-- Select Sub-Task Count --</option>
+                    </select>
+                    <small id="subTaskInfo">Select how many sub-tasks to create (max = registered workers)</small>
+                </div>
+
+                <div id="subTaskInputs">
+                    <!-- Dynamic sub-task input fields will be added here -->
+                </div>
+
+                <button type="submit" class="btn-submit">
+                    <span id="submitText">Submit Task via M1 TCP</span>
+                    <span id="submitSpinner" class="spinner" style="display:none;">⏳</span>
+                </button>
+            </form>
+        </div>
+
+        <div class="status-panel">
+            <h3>📊 Submission Status</h3>
+            <div id="statusMessage" class="status-message ready">Ready to submit tasks...</div>
+
+            <div id="responsePanel" class="response-panel" style="display:none;">
+                <h4>Server Response:</h4>
+                <pre id="responseData"></pre>
+            </div>
+        </div>
+
+        <div class="recent-tasks">
+            <h3>📝 Recent Submissions</h3>
+            <div id="recentTasksList" class="recent-list"></div>
+        </div>
+    </div>
+
+    <script>
+        // M1 Task Submission via HTTP POST (triggers TCP backend)
+        const taskForm = document.getElementById('taskForm');
+        const statusMessage = document.getElementById('statusMessage');
+        const responsePanel = document.getElementById('responsePanel');
+        const responseData = document.getElementById('responseData');
+        const submitText = document.getElementById('submitText');
+        const submitSpinner = document.getElementById('submitSpinner');
+        const recentTasksList = document.getElementById('recentTasksList');
+        const subTaskCountSelect = document.getElementById('subTaskCount');
+        const workerCountInfo = document.getElementById('workerCountInfo');
+        const subTaskInputs = document.getElementById('subTaskInputs');
+
+        // Load recent tasks from localStorage
+        let recentTasks = JSON.parse(localStorage.getItem('recentTasks') || '[]');
+        displayRecentTasks();
+
+        // Load available workers on page load
+        loadWorkers();
+
+        // Listen for sub-task count changes to generate input fields
+        subTaskCountSelect.addEventListener('change', function () {
+            const count = parseInt(this.value);
+            // Save selection to localStorage
+            localStorage.setItem('selectedSubTaskCount', count);
+            generateSubTaskInputs(count);
+        });
+
+        function generateSubTaskInputs(count) {
+            subTaskInputs.innerHTML = ''; // Clear existing inputs
+
+            if (!count || count < 1) {
+                return;
+            }
+
+            for (let i = 1; i <= count; i++) {
+                const formGroup = document.createElement('div');
+                formGroup.className = 'form-group';
+
+                const label = document.createElement('label');
+                label.setAttribute('for', `subTask${i}Data`);
+                label.textContent = `Sub-task ${i} Data:`;
+
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.id = `subTask${i}Data`;
+                input.name = `subTask${i}Data`;
+                input.placeholder = `Enter data for sub-task ${i} (e.g., 'Process batch ${i}')`;
+                input.required = true;
+
+                const small = document.createElement('small');
+                small.textContent = `Data/payload for sub-task ${i}`;
+
+                formGroup.appendChild(label);
+                formGroup.appendChild(input);
+                formGroup.appendChild(small);
+
+                subTaskInputs.appendChild(formGroup);
+            }
+        }
+
+        async function loadWorkers() {
+            try {
+                const response = await fetch('/api/workers');
+                const workers = await response.json();
+
+                const workerCount = workers.length;
+
+                if (workerCount === 0) {
+                    workerCountInfo.textContent = '⚠️ No workers registered! Start workers first.';
+                    workerCountInfo.style.color = '#dc3545';
+                    subTaskCountSelect.disabled = true;
+                    return;
+                }
+
+                workerCountInfo.textContent = `✅ ${workerCount} worker(s) registered`;
+                workerCountInfo.style.color = '#28a745';
+
+                // Enable the dropdown
+                subTaskCountSelect.disabled = false;
+
+                // Populate sub-task count dropdown (1 to workerCount)
+                subTaskCountSelect.innerHTML = '<option value="">-- Select Sub-Task Count --</option>';
+                for (let i = 1; i <= workerCount; i++) {
+                    const option = document.createElement('option');
+                    option.value = i;
+                    option.textContent = `${i} sub-task${i > 1 ? 's' : ''} (${i === workerCount ? 'max - all workers' : i === 1 ? 'single worker' : i + ' workers'})`;
+                    subTaskCountSelect.appendChild(option);
+                }
+
+                // Restore previous selection from localStorage, or default to max
+                const savedCount = localStorage.getItem('selectedSubTaskCount');
+                if (savedCount && parseInt(savedCount) <= workerCount) {
+                    subTaskCountSelect.value = savedCount;
+                    generateSubTaskInputs(parseInt(savedCount));
+                } else {
+                    // Select max by default and generate inputs
+                    subTaskCountSelect.value = workerCount;
+                    generateSubTaskInputs(workerCount);
+                    // Save the default selection
+                    localStorage.setItem('selectedSubTaskCount', workerCount);
+                }
+
+            } catch (error) {
+                workerCountInfo.textContent = '❌ Failed to load workers';
+                workerCountInfo.style.color = '#dc3545';
+                console.error('Error loading workers:', error);
+            }
+        }
+
+        taskForm.addEventListener('submit', async function (e) {
+            e.preventDefault();
+
+            const taskId = document.getElementById('taskId').value;
+            const taskName = document.getElementById('taskName').value;
+            const subTaskCount = parseInt(document.getElementById('subTaskCount').value);
+
+            if (!subTaskCount) {
+                updateStatus('❌ Please select number of sub-tasks', 'error');
+                return;
+            }
+
+            // Collect all sub-task data
+            const subTaskData = [];
+            for (let i = 1; i <= subTaskCount; i++) {
+                const input = document.getElementById(`subTask${i}Data`);
+                if (!input || !input.value.trim()) {
+                    updateStatus(`❌ Please enter data for sub-task ${i}`, 'error');
+                    return;
+                }
+                subTaskData.push(input.value.trim());
+            }
+
+            // Combine all sub-task data into a single string (for compatibility with current backend)
+            const taskData = subTaskData.join(' | ');
+
+            // Show loading state
+            submitText.style.display = 'none';
+            submitSpinner.style.display = 'inline';
+            updateStatus(`Submitting task to broker via M1 TCP (${subTaskCount} sub-tasks)...`, 'info');
+
+            try {
+                // Web UI uses HTTP POST to trigger M1 TCP submission (then M4 multicast, then M2 dispatch)
+                const response = await fetch('/api/submit-task', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        taskId: parseInt(taskId),
+                        taskName: taskName,
+                        taskData: taskData,
+                        subTaskCount: subTaskCount
+                    })
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    updateStatus(`✅ Task "${taskName}" submitted successfully! Split into ${subTaskCount} sub-tasks. M1 acknowledged: ${result.message}`, 'success');
+
+                    // Show response
+                    responsePanel.style.display = 'block';
+                    responseData.textContent = JSON.stringify(result, null, 2);
+
+                    // Add to recent tasks
+                    addRecentTask(taskId, taskName, taskData, subTaskCount, result.message);
+
+                    // Clear form
+                    taskForm.reset();
+                    // Clear dynamic inputs
+                    subTaskInputs.innerHTML = '';
+                    // Reload workers and reset dropdown
+                    loadWorkers();
+
+                    // Suggest viewing dashboard
+                    setTimeout(() => {
+                        updateStatus('✅ Task submitted! View progress on Dashboard →', 'success');
+                    }, 2000);
+                } else {
+                    updateStatus(`❌ Error: ${result.message || 'Unknown error'}`, 'error');
+                    responsePanel.style.display = 'block';
+                    responseData.textContent = JSON.stringify(result, null, 2);
+                }
+            } catch (error) {
+                updateStatus(`❌ Connection error: ${error.message}`, 'error');
+                responsePanel.style.display = 'block';
+                responseData.textContent = `Error: ${error.message}\n\nMake sure the broker is running on port 8080.`;
+            } finally {
+                // Reset button
+                submitText.style.display = 'inline';
+                submitSpinner.style.display = 'none';
+            }
+        });
+
+        function updateStatus(message, type) {
+            statusMessage.textContent = message;
+            statusMessage.className = `status-message ${type}`;
+        }
+
+        function addRecentTask(taskId, taskName, taskData, subTaskCount, response) {
+            const task = {
+                id: taskId,
+                name: taskName,
+                data: taskData.substring(0, 50) + (taskData.length > 50 ? '...' : ''),
+                subTasks: subTaskCount,
+                response: response,
+                timestamp: new Date().toLocaleString()
+            };
+
+            recentTasks.unshift(task);
+            if (recentTasks.length > 5) recentTasks.pop();
+
+            localStorage.setItem('recentTasks', JSON.stringify(recentTasks));
+            displayRecentTasks();
+        }
+
+        function displayRecentTasks() {
+            if (recentTasks.length === 0) {
+                recentTasksList.innerHTML = '<p class="empty-state">No recent submissions</p>';
+                return;
+            }
+
+            recentTasksList.innerHTML = recentTasks.map(task => `
+                <div class="recent-task-item">
+                    <strong>Task ${task.id}: ${task.name || 'Unnamed'}</strong>
+                    <small>${task.timestamp} | ${task.subTasks || '?'} sub-tasks</small>
+                    <p>${task.data}</p>
+                    <span class="badge success">${task.response}</span>
+                </div>
+            `).join('');
+        }
+
+        // Auto-refresh worker count every 30 seconds (reduced to minimize dropdown resets)
+        setInterval(loadWorkers, 30000);
+    </script>
+</body>
+
+</html>

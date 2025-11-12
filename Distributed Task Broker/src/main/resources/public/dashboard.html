@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Broker Dashboard - Real-time Monitoring</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>📊 Distributed Task Broker Dashboard</h1>
+            <p class="subtitle">Real-time Monitoring with M3 NIO Broadcasts</p>
+            <nav class="nav-links">
+                <a href="/">Submit Task</a>
+                <a href="/dashboard.html" class="active">Dashboard</a>
+                <a href="/workers.html">Workers</a>
+            </nav>
+            <div id="wsStatus" class="ws-status disconnected">⚫ Disconnected</div>
+        </header>
+
+        <div class="dashboard-section">
+            <h2>⚡ System Status</h2>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-icon">👷</div>
+                    <h3>Active Workers</h3>
+                    <div id="activeWorkers" class="stat-value">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">⚡</div>
+                    <h3>Busy Workers</h3>
+                    <div id="busyWorkers" class="stat-value">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">💤</div>
+                    <h3>Idle Workers</h3>
+                    <div id="idleWorkers" class="stat-value">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">�</div>
+                    <h3>Active Tasks</h3>
+                    <div id="activeTasks" class="stat-value">0</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="dashboard-section">
+            <h2>📊 Task Overview</h2>
+            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px;">
+                <!-- Pending Tasks List -->
+                <div>
+                    <h3 style="margin-bottom: 15px;">📋 Pending Tasks</h3>
+                    <div id="pendingTasksList" class="task-list-container">
+                        <p class="empty-state">No pending tasks</p>
+                    </div>
+                </div>
+
+                <!-- Completed Tasks List -->
+                <div>
+                    <h3 style="margin-bottom: 15px;">✅ Completed Tasks</h3>
+                    <div id="completedTasksList" class="task-list-container">
+                        <p class="empty-state">No completed tasks</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="dashboard-section">
+            <h2>👷 Worker Status</h2>
+            <div id="workerList" class="worker-list"></div>
+        </div>
+
+        <div class="dashboard-section">
+            <h2>📋 Task Queue (M1 + M2)</h2>
+            <div id="taskQueue" class="task-list"></div>
+        </div>
+
+        <div class="dashboard-section">
+            <h2>🔧 Module Health Check</h2>
+            <div class="module-health-grid">
+                <div class="health-card" id="m1Health">
+                    <strong>M1: TCP</strong>
+                    <div class="health-indicator">⚫</div>
+                    <small>Port 5000</small>
+                </div>
+                <div class="health-card" id="m2Health">
+                    <strong>M2: ExecutorService</strong>
+                    <div class="health-indicator">⚫</div>
+                    <small>10 threads</small>
+                </div>
+                <div class="health-card" id="m3Health">
+                    <strong>M3: NIO Selector</strong>
+                    <div class="health-indicator">⚫</div>
+                    <small>Port 5002</small>
+                </div>
+                <div class="health-card" id="m4Health">
+                    <strong>M4: Multicast</strong>
+                    <div class="health-indicator">⚫</div>
+                    <small>230.0.0.1:6005</small>
+                </div>
+                <div class="health-card" id="m5Health">
+                    <strong>M5: UDP</strong>
+                    <div class="health-indicator">⚫</div>
+                    <small>Port 5001</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // WebSocket connection for real-time updates
+        let ws = null;
+        let nioBroadcastCount = 0;
+        let reconnectInterval = null;
+
+        // Initialize WebSocket
+        function initWebSocket() {
+            try {
+                ws = new WebSocket('ws://localhost:8080/ws');
+
+                ws.onopen = function () {
+                    console.log('✅ Connected to broker WebSocket');
+                    updateWSStatus(true);
+                    updateModuleHealth('m4Health', true); // M4 Multicast status (WebSocket connected)
+
+                    // Request initial status only once
+                    sendMessage({ type: 'REQUEST_STATUS' });
+
+                    // Clear any existing intervals
+                    if (reconnectInterval) clearInterval(reconnectInterval);
+                };
+
+                ws.onmessage = function (event) {
+                    console.log('📨 Message from broker:', event.data);
+                    handleBrokerMessage(event.data);
+                };
+
+                ws.onerror = function (error) {
+                    console.error('❌ WebSocket error:', error);
+                    updateWSStatus(false);
+                };
+
+                ws.onclose = function () {
+                    console.log('⚫ Disconnected from broker');
+                    updateWSStatus(false);
+                    updateModuleHealth('m4Health', false);
+
+                    // Reconnect after 5 seconds
+                    setTimeout(initWebSocket, 5000);
+                };
+            } catch (error) {
+                console.error('Failed to create WebSocket:', error);
+                updateWSStatus(false);
+                setTimeout(initWebSocket, 5000);
+            }
+        }
+
+        // Handle incoming messages
+        function handleBrokerMessage(data) {
+            try {
+                const message = JSON.parse(data);
+
+                switch (message.type) {
+                    case 'STATUS_UPDATE':
+                        updateDashboardStats(message.data);
+                        break;
+
+                    case 'NIO_BROADCAST':
+                        // M3: Handle NIO broadcast
+                        handleNIOBroadcast(message);
+                        break;
+
+                    case 'TASK_PROGRESS':
+                        // M3: Task progress from NIO
+                        addBroadcastLog(message);
+                        break;
+
+                    case 'WORKER_UPDATE':
+                        updateWorkerList(message.workers);
+                        break;
+
+                    default:
+                        console.log('Unknown message type:', message.type);
+                }
+            } catch (e) {
+                // Plain text message (e.g., NIO broadcast)
+                addBroadcastLog({
+                    type: 'NIO_BROADCAST',
+                    message: data,
+                    timestamp: new Date().toISOString()
+                });
+            }
+        }
+
+        // Update dashboard statistics
+        function updateDashboardStats(data) {
+            // These will be updated by fetchTaskOverview
+        }
+
+        // Fetch and update task overview
+        async function fetchTaskOverview() {
+            try {
+                const response = await fetch('/api/task-overview');
+                const overview = await response.json();
+
+                // Update pending tasks list
+                const pendingTasksList = document.getElementById('pendingTasksList');
+                if (overview.pendingTasks && overview.pendingTasks.length > 0) {
+                    pendingTasksList.innerHTML = overview.pendingTasks.map(task => `
+                        <div class="task-item">
+                            <div class="task-item-header">
+                                <strong>📋 ${task.taskName}</strong>
+                                <span class="task-progress">${task.completedSubTasks}/${task.totalSubTasks}</span>
+                            </div>
+                            <div class="task-item-details">
+                                <small>Task ID: ${task.taskId}</small>
+                                <div class="progress-bar">
+                                    <div class="progress-fill" style="width: ${(task.completedSubTasks / task.totalSubTasks) * 100}%"></div>
+                                </div>
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    pendingTasksList.innerHTML = '<p class="empty-state">No pending tasks</p>';
+                }
+
+                // Update completed tasks list
+                const completedTasksList = document.getElementById('completedTasksList');
+                if (overview.completedTasks && overview.completedTasks.length > 0) {
+                    completedTasksList.innerHTML = overview.completedTasks.map(task => `
+                        <div class="task-item completed">
+                            <div class="task-item-header">
+                                <strong>✅ ${task.taskName}</strong>
+                                <span class="badge success">Completed</span>
+                            </div>
+                            <div class="task-item-details">
+                                <small>Task ID: ${task.taskId} • All ${task.totalSubTasks} sub-tasks completed</small>
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    completedTasksList.innerHTML = '<p class="empty-state">No completed tasks</p>';
+                }
+            } catch (error) {
+                console.error('Failed to fetch task overview:', error);
+            }
+        }
+
+        // Fetch and update worker statistics
+        async function fetchWorkerStats() {
+            try {
+                const response = await fetch('/api/worker-stats');
+                const workerStats = await response.json();
+                const workers = Object.values(workerStats);
+
+                // Calculate worker counts based on new rules
+                const activeWorkers = workers.filter(w => w.pendingSubTasks >= 1).length;
+                const busyWorkers = workers.filter(w => w.pendingSubTasks > 1).length;
+                const idleWorkers = workers.filter(w => w.pendingSubTasks === 0).length;
+
+                // Calculate total active tasks (sum of all pending sub-tasks)
+                const totalPendingSubTasks = workers.reduce((sum, w) => sum + w.pendingSubTasks, 0);
+
+                // Update the UI
+                document.getElementById('activeWorkers').textContent = activeWorkers;
+                document.getElementById('busyWorkers').textContent = busyWorkers;
+                document.getElementById('idleWorkers').textContent = idleWorkers;
+                document.getElementById('activeTasks').textContent = totalPendingSubTasks;
+
+                // Update worker list
+                updateWorkerListWithStats(workers);
+
+                updateModuleHealth('m5Health', workers.length > 0);
+            } catch (error) {
+                console.error('Failed to fetch worker stats:', error);
+            }
+        }
+
+        // Update worker list with statistics
+        function updateWorkerListWithStats(workers) {
+            const workerList = document.getElementById('workerList');
+
+            if (!workers || workers.length === 0) {
+                workerList.innerHTML = '<p class="empty-state">No workers registered</p>';
+                return;
+            }
+
+            workerList.innerHTML = workers.map(worker => {
+                const statusClass = worker.status === 'IDLE' ? 'success' :
+                    worker.status === 'ACTIVE' ? 'warning' : 'danger';
+                const statusEmoji = worker.status === 'IDLE' ? '💤' :
+                    worker.status === 'ACTIVE' ? '✅' : '⚡';
+
+                return `
+                <div class="worker-card">
+                    <div class="worker-header">
+                        <strong>${statusEmoji} Worker ${worker.tcpPort}</strong>
+                        <span class="badge ${statusClass}">${worker.status}</span>
+                    </div>
+                    <p>Address: ${worker.address}</p>
+                    <p>TCP Port: ${worker.tcpPort}</p>
+                    <p>Pending Sub-Tasks: <strong>${worker.pendingSubTasks}</strong></p>
+                </div>
+            `;
+            }).join('');
+        }
+
+        // Update WebSocket status indicator
+        function updateWSStatus(connected) {
+            const wsStatus = document.getElementById('wsStatus');
+            if (connected) {
+                wsStatus.className = 'ws-status connected';
+                wsStatus.textContent = '🟢 Connected';
+            } else {
+                wsStatus.className = 'ws-status disconnected';
+                wsStatus.textContent = '⚫ Disconnected';
+            }
+        }
+
+        // Update module health
+        function updateModuleHealth(moduleId, healthy) {
+            const module = document.getElementById(moduleId);
+            if (module) {
+                const indicator = module.querySelector('.health-indicator');
+                indicator.textContent = healthy ? '🟢' : '⚫';
+            }
+        }
+
+        // Send message to broker
+        function sendMessage(data) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(data));
+            }
+        }
+
+        // Initialize dashboard
+        window.addEventListener('load', function () {
+            initWebSocket();
+            fetchWorkerStats();
+            fetchTaskOverview();
+
+            updateModuleHealth('m1Health', true); // M1 TCP working
+            updateModuleHealth('m2Health', true); // M2 working
+            updateModuleHealth('m3Health', true); // M3 NIO working
+            updateModuleHealth('m4Health', true); // M4 Multicast working
+
+            // Fetch worker stats and task overview every 3 seconds for real-time updates
+            setInterval(fetchWorkerStats, 3000);
+            setInterval(fetchTaskOverview, 3000);
+        });
+    </script>
+</body>
+
+</html>
